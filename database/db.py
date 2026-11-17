@@ -9,7 +9,9 @@ from config import (
     DEFAULT_BIRTHDAY_GIFT,
     ADMIN_IDS,
     TURSO_DATABASE_URL,
-    TURSO_AUTH_TOKEN
+    TURSO_AUTH_TOKEN,
+    FUND_START_YEAR,
+    FUND_START_MONTH
 )
 
 class CursorWrapper:
@@ -163,6 +165,19 @@ async def init_db():
         """)
         conn.commit()
 
+    # Fond boshlangan (01.09.2026) dan to bugungacha bo'lgan barcha oylarni tayyorlash
+    await ensure_active_periods()
+
+async def ensure_active_periods():
+    today = date.today()
+    cur_y, cur_m = FUND_START_YEAR, FUND_START_MONTH
+    while (cur_y < today.year) or (cur_y == today.year and cur_m <= today.month):
+        await generate_monthly_dues(cur_y, cur_m)
+        cur_m += 1
+        if cur_m > 12:
+            cur_m = 1
+            cur_y += 1
+
 # --- Xodimlar bo'yicha funksiyalar ---
 
 def parse_day_month(birth_date_str: str) -> str:
@@ -181,15 +196,13 @@ async def add_member(full_name: str, birth_date: str, phone: str = None, telegra
         """, (telegram_id, full_name, phone, birth_date, day_month, role))
         member_id = cursor.lastrowid
 
-        # Agar joriy oy badallari ochilgan bo'lsa, yangi a'zoga ham oylik badal yozish
-        today = date.today()
-        current_period = f"{today.year}-{today.month:02d}"
-        period_exists = conn.execute("SELECT period FROM monthly_periods WHERE period = ?", (current_period,)).fetchone()
-        if period_exists:
+        # Fond hisobi boshlanganidan (01.09.2026) buyon mavjud bo'lgan barcha oylar uchun badal yozish
+        periods = conn.execute("SELECT period FROM monthly_periods").fetchall()
+        for p in periods:
             conn.execute("""
                 INSERT OR IGNORE INTO monthly_dues (period, member_id, amount, status)
                 VALUES (?, ?, ?, 'unpaid')
-            """, (current_period, member_id, DEFAULT_MONTHLY_FEE))
+            """, (p["period"], member_id, DEFAULT_MONTHLY_FEE))
 
         conn.commit()
         return member_id
